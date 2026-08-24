@@ -14,6 +14,13 @@ into specNameCommon/exception, type_grouping rows split into TypeMatch/BasicSpec
 per the scenario/edge-case plan, then call `build(...)` below rather than
 hand-writing csv.writer / openpyxl code inline every time.
 
+For the Input CSV specifically, `input_rows`/`input_header` may instead be authored as a
+compact pipe-delimited header+rows text block and turned into the same list[dict]/header
+shape via `parse_pipe_table()` below (see its docstring) — this saves tokens versus writing
+out a Python dict literal per row. The other 4 row lists (specNameCommon, exception,
+TypeMatch, BasicSpecDefenition) stay plain Python list-of-dict literals; they're capped
+small enough that a second format isn't worth it there.
+
 Usage:
     from build_files import build
 
@@ -36,6 +43,45 @@ Usage:
 import csv
 import os
 import re
+
+
+def parse_pipe_table(text, expected_header=None):
+    """Parse a pipe-delimited header+rows text block into the list[dict] shape
+    build()'s input_rows expects, plus the header list for input_header.
+
+    Format: one header line (column names joined by '|'), then one line per row
+    with values in the same column order, also joined by '|'. Empty cells are
+    just two consecutive '|'s. Every row must have exactly as many '|'-separated
+    cells as the header (pad trailing empty cells for rows with fewer spec sets
+    than the widest row). Never put a literal '|' inside a cell's content.
+
+    part_number_rules is the one documented column that's legitimately
+    multi-line (one `IF [...] Rule ...;` statement per line, per
+    test_run_conventions.md §8). Since a raw newline can't be told apart from a
+    row boundary, encode an embedded newline inside a cell as the literal
+    two-character escape '\\n' when authoring the text; this function converts
+    it back to a real newline after splitting rows/columns.
+
+    Raises ValueError (naming the line number) on a header mismatch or a row
+    whose cell count doesn't match the header, so a miscounted row fails loud
+    instead of silently shifting columns.
+    """
+    lines = [line for line in text.strip("\n").split("\n") if line != ""]
+    if not lines:
+        raise ValueError("empty pipe table text")
+    header = lines[0].split("|")
+    if expected_header is not None and header != expected_header:
+        raise ValueError(f"header mismatch: got {header}, expected {expected_header}")
+    rows = []
+    for lineno, line in enumerate(lines[1:], start=2):
+        cells = line.split("|")
+        if len(cells) != len(header):
+            raise ValueError(
+                f"line {lineno}: expected {len(header)} columns, got {len(cells)}: {line!r}"
+            )
+        cells = [cell.strip().replace("\\n", "\n") for cell in cells]
+        rows.append(dict(zip(header, cells)))
+    return rows
 
 
 def _category_to_filename_segment(category_name_common: str) -> str:
