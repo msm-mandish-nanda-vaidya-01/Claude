@@ -38,7 +38,10 @@ Usage:
         output_dir="/mnt/user-data/outputs",
     )
     print(result["paths"])
-    print(result["warnings"])
+
+DDB mode only (on explicit request, after build()): write the Discontinued CSV from
+the same input_rows via build_discontinued(...) — see its docstring and
+test_run_conventions.md §16.
 """
 import csv
 import os
@@ -208,4 +211,103 @@ def doc_filenames(category_name_common, yymmdd, scenario_tag):
     tag = f"_{scenario_tag}" if scenario_tag else ""
     scenarios_name = f"TestScenarios_{cat}_{yymmdd}_TestFile{tag}.md"
     return scenarios_name
+
+
+# --- Discontinued DB (DDB) file (test_run_conventions.md §16) -----------------
+
+DDB_PREFIX = "JIRA-DDB-"
+DISCONTINUED_FIXED_HEADER = [
+    "discontinued_part_number", "discontinued_part_number_type",
+    "category_name_original_en", "category_name_original", "category_name_common",
+    "brand_name_original_en", "brand_name_original", "brand_name_common",
+    "subsidary_cd", "discontinued_params",
+]
+
+
+def discontinued_header(n_slots):
+    """10 fixed columns + (recommend_part_number_n, recommend_part_number_type_n,
+    recommend_params_n) for n = 1..n_slots  ->  10 + 3N columns."""
+    header = list(DISCONTINUED_FIXED_HEADER)
+    for n in range(1, n_slots + 1):
+        header += [f"recommend_part_number_{n}", f"recommend_part_number_type_{n}", f"recommend_params_{n}"]
+    return header
+
+
+def discontinued_filename(category_name_common, subsidary_cd, yymmdd, scenario_tag):
+    """'Discontinued_<CAT>_<SUB>_TestFile_<YYMMDD>_<tag>.csv'. The tag (1-2 word test
+    nature) is mandatory here and is the same scenario tag used on the other files."""
+    if not scenario_tag:
+        raise ValueError("Discontinued file requires a scenario tag (1-2 word test nature), e.g. 'replacement_chain'")
+    cat = _category_to_filename_segment(category_name_common)
+    return f"Discontinued_{cat}_{subsidary_cd}_TestFile_{yymmdd}_{scenario_tag}.csv"
+
+
+def build_discontinued(
+    input_rows,
+    recommendations,
+    category_name_common,
+    subsidary_cd,
+    yymmdd,
+    scenario_tag,
+    n_slots=3,
+    output_dir="/mnt/user-data/outputs",
+):
+    """Write the Discontinued CSV, derived entirely from the Input GDB rows.
+
+    recommendations: ordered dict {ddb_part_number: [normal_part_number, ...]} — one
+    key per JIRA-DDB- row in input_rows; an empty list means "no alternative".
+    Every value (types, category/brand, params) is looked up from input_rows, so
+    nothing is re-typed; *_en columns copy the matching *_original value.
+    """
+    if not re.fullmatch(r"\d{6}", yymmdd):
+        raise ValueError(f"yymmdd must be 6 digits, got {yymmdd!r}")
+    if n_slots < 1:
+        raise ValueError(f"n_slots must be >= 1, got {n_slots}")
+
+    by_pn = {row["part_number"]: row for row in input_rows}
+    gdb_ddb = [pn for pn in by_pn if pn.startswith(DDB_PREFIX)]
+    missing = [pn for pn in gdb_ddb if pn not in recommendations]
+    if missing:
+        raise ValueError(f"DDB row(s) in the GDB have no entry in recommendations: {missing}")
+
+    rows = []
+    for ddb_pn, recs in recommendations.items():
+        if not ddb_pn.startswith(DDB_PREFIX):
+            raise ValueError(f"{ddb_pn!r} is not a DDB part number (must start with {DDB_PREFIX})")
+        src = by_pn.get(ddb_pn)
+        if src is None:
+            raise ValueError(f"discontinued part number {ddb_pn!r} not found in the GDB rows")
+        if len(recs) > n_slots:
+            raise ValueError(f"{ddb_pn!r} has {len(recs)} recommendations but n_slots={n_slots}")
+        if len(set(recs)) != len(recs):
+            raise ValueError(f"{ddb_pn!r} repeats a recommended part number: {recs}")
+
+        out = {
+            "discontinued_part_number": ddb_pn,
+            "discontinued_part_number_type": src["part_number_type"],
+            "category_name_original_en": src["category_name_original"],
+            "category_name_original": src["category_name_original"],
+            "category_name_common": src["category_name_common"],
+            "brand_name_original_en": src["brand_name_original"],
+            "brand_name_original": src["brand_name_original"],
+            "brand_name_common": src["brand_name_common"],
+            "subsidary_cd": src["subsidary_cd"],
+            "discontinued_params": src.get("params", ""),
+        }
+        for n, rec_pn in enumerate(recs, start=1):
+            rec = by_pn.get(rec_pn)
+            if rec is None:
+                raise ValueError(f"recommended part number {rec_pn!r} (for {ddb_pn!r}) not found in the GDB rows")
+            if rec_pn.startswith(DDB_PREFIX):
+                raise ValueError(f"recommended part number {rec_pn!r} (for {ddb_pn!r}) is itself a DDB row")
+            out[f"recommend_part_number_{n}"] = rec_pn
+            out[f"recommend_part_number_type_{n}"] = rec["part_number_type"]
+            out[f"recommend_params_{n}"] = rec.get("params", "")
+        rows.append(out)
+
+    os.makedirs(output_dir, exist_ok=True)
+    name = discontinued_filename(category_name_common, subsidary_cd, yymmdd, scenario_tag)
+    path = os.path.join(output_dir, name)
+    _write_csv_with_bom(path, discontinued_header(n_slots), rows)
+    return {"path": path, "filename": name}
 

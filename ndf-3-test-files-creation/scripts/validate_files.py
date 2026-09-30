@@ -10,7 +10,10 @@ can't be checked mechanically. But every rule with a concrete, testable
 condition is checked here.
 
 Usage:
-    python validate_files.py <input_csv_path> <spec_grouping_xlsx_path> <type_grouping_xlsx_path>
+    python validate_files.py <input_csv_path> <spec_grouping_xlsx_path> <type_grouping_xlsx_path> [<discontinued_csv_path>]
+
+The optional 4th argument (DDB mode only) also validates the Discontinued CSV
+against the Input CSV (validation_rules.md §4).
 
 Exits non-zero and prints ERROR/WARN lines if anything looks off. Claude should
 run this after build_files.build(...) and fix any ERRORs before calling
@@ -424,6 +427,7 @@ def validate_input_csv(path, report: Report):
         "spec_names": spec_names_all,
         "part_number_types": part_number_types,
         "brands": {row.get("brand_name_common") for row in rows},
+        "rows": rows,
     }
 
 
@@ -510,14 +514,127 @@ def validate_xlsx_pair(spec_path, type_path, input_ctx, report: Report):
                 report.err(f"BasicSpecDefenition spec_name_common {r.get('spec_name_common')!r} not found in Input CSV")
 
 
+DDB_PREFIX = "JIRA-DDB-"
+DISCONTINUED_FIXED_HEADER = [
+    "discontinued_part_number", "discontinued_part_number_type",
+    "category_name_original_en", "category_name_original", "category_name_common",
+    "brand_name_original_en", "brand_name_original", "brand_name_common",
+    "subsidary_cd", "discontinued_params",
+]
+# discontinued column -> GDB column it is copied from (validation_rules.md §4)
+_DISCONTINUED_SOURCE = {
+    "discontinued_part_number_type": "part_number_type",
+    "category_name_original_en": "category_name_original",
+    "category_name_original": "category_name_original",
+    "category_name_common": "category_name_common",
+    "brand_name_original_en": "brand_name_original",
+    "brand_name_original": "brand_name_original",
+    "brand_name_common": "brand_name_common",
+    "subsidary_cd": "subsidary_cd",
+    "discontinued_params": "params",
+}
+
+
+def validate_discontinued(path, gdb_rows, report: Report):
+    """Discontinued DB file checks (validation_rules.md §4 / test_run_conventions.md §16)."""
+    with open(path, "rb") as f:
+        if f.read(3) != b"\xef\xbb\xbf":
+            report.err(f"{path}: missing UTF-8 BOM (must be utf-8-sig)")
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader, [])
+        raw_rows = list(reader)
+
+    # header: 10 fixed columns + complete, contiguous triples for n = 1..N (N >= 1)
+    fixed = len(DISCONTINUED_FIXED_HEADER)
+    if header[:fixed] != DISCONTINUED_FIXED_HEADER:
+        report.err(f"Discontinued header must start with the 10 fixed columns {DISCONTINUED_FIXED_HEADER}, got {header[:fixed]}")
+        return
+    tail = header[fixed:]
+    n_slots = len(tail) // 3
+    expected_tail = []
+    for n in range(1, n_slots + 1):
+        expected_tail += [f"recommend_part_number_{n}", f"recommend_part_number_type_{n}", f"recommend_params_{n}"]
+    if n_slots < 1 or len(tail) % 3 != 0 or tail != expected_tail:
+        report.err(
+            f"Discontinued header after the fixed columns must be complete contiguous "
+            f"recommend_* triples for n=1..N (N>=1), got {tail}"
+        )
+        return
+
+    by_pn = {r.get("part_number"): r for r in gdb_rows}
+    seen = Counter()
+    for i, cells in enumerate(raw_rows, start=2):
+        if len(cells) != len(header):
+            report.err(f"Discontinued row {i}: expected {len(header)} cells, got {len(cells)}")
+            continue
+        row = dict(zip(header, cells))
+        pn = row["discontinued_part_number"]
+        seen[pn] += 1
+        src = by_pn.get(pn)
+        if src is None:
+            report.err(f"Discontinued row {i}: discontinued_part_number {pn!r} not found in the Input CSV")
+        elif not pn.startswith(DDB_PREFIX):
+            report.err(f"Discontinued row {i}: {pn!r} is a normal (non-DDB) row and must not be listed as discontinued")
+        if src is not None:
+            for col, gdb_col in _DISCONTINUED_SOURCE.items():
+                if row[col] != src.get(gdb_col, ""):
+                    report.err(f"Discontinued row {i}: {col} {row[col]!r} != GDB {gdb_col} {src.get(gdb_col, '')!r} for {pn!r}")
+
+        recs = []
+        empty_seen_at = None
+        for n in range(1, n_slots + 1):
+            rpn = row[f"recommend_part_number_{n}"]
+            rtype = row[f"recommend_part_number_type_{n}"]
+            rparams = row[f"recommend_params_{n}"]
+            filled = bool(rpn or rtype)
+            if not filled:
+                if rparams:
+                    report.err(f"Discontinued row {i}: slot {n} is empty but recommend_params_{n} is set: {rparams!r}")
+                if empty_seen_at is None:
+                    empty_seen_at = n
+                continue
+            if not (rpn and rtype):
+                report.err(f"Discontinued row {i}: slot {n} is partially filled (part_number={rpn!r}, type={rtype!r})")
+            if empty_seen_at is not None:
+                report.err(f"Discontinued row {i}: slot {n} is filled after empty slot {empty_seen_at} (slots must fill left to right)")
+            recs.append(rpn)
+            rec = by_pn.get(rpn)
+            if rec is None:
+                report.err(f"Discontinued row {i}: recommend_part_number_{n} {rpn!r} not found in the Input CSV")
+                continue
+            if rpn.startswith(DDB_PREFIX):
+                report.err(f"Discontinued row {i}: recommend_part_number_{n} {rpn!r} is a DDB row and must not be recommended")
+            if rtype != rec.get("part_number_type", ""):
+                report.err(f"Discontinued row {i}: recommend_part_number_type_{n} {rtype!r} != GDB {rec.get('part_number_type')!r} for {rpn!r}")
+            if rparams != rec.get("params", ""):
+                report.err(f"Discontinued row {i}: recommend_params_{n} {rparams!r} != GDB params {rec.get('params', '')!r} for {rpn!r}")
+        dup_recs = [p for p, c in Counter(r for r in recs if r).items() if c > 1]
+        if dup_recs:
+            report.err(f"Discontinued row {i}: recommended part number(s) repeated within the row: {dup_recs}")
+
+    for pn, c in seen.items():
+        if c > 1:
+            report.err(f"Discontinued file lists {pn!r} {c} times (one row per DDB part number)")
+    gdb_ddb = {pn for pn in by_pn if pn and pn.startswith(DDB_PREFIX)}
+    missing = gdb_ddb - set(seen)
+    if missing:
+        report.err(f"Discontinued file is missing row(s) for DDB part number(s) in the Input CSV: {sorted(missing)}")
+
+
 def main():
-    if len(sys.argv) != 4:
-        print("Usage: python validate_files.py <input_csv> <spec_grouping_xlsx> <type_grouping_xlsx>")
+    # messages contain icons (①...) / Japanese; a piped Windows stdout defaults to cp1252
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if len(sys.argv) not in (4, 5):
+        print("Usage: python validate_files.py <input_csv> <spec_grouping_xlsx> <type_grouping_xlsx> [<discontinued_csv>]")
         sys.exit(2)
     input_csv, spec_xlsx, type_xlsx = sys.argv[1:4]
     report = Report()
     ctx = validate_input_csv(input_csv, report)
     validate_xlsx_pair(spec_xlsx, type_xlsx, ctx, report)
+    if len(sys.argv) == 5:
+        validate_discontinued(sys.argv[4], ctx["rows"], report)
     report.print_all()
     sys.exit(0 if report.ok() else 1)
 

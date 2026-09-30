@@ -14,6 +14,8 @@ Every ETL test requires exactly three files:
 
 All three files must use the same `category_name_common` in their file names. They are processed together by the pipeline.
 
+**DDB mode (on request only):** a fourth pipeline file, the **Discontinued** CSV, is added when the user says the ticket is for the DDB (discontinued database). It is derived from the Input CSV — see §16.
+
 ## 2. Category Name Convention
 
 The category name is derived directly from the Jira ticket number, to ensure uniqueness across all test files.
@@ -56,6 +58,8 @@ Part numbers are tied to the Jira ticket number and the sequential row number. *
 
 **Example (without icons, ticket NDFDPAPJ-1457):**
 - `JIRA-1457-01` (no params, no rules — plain part number, `params` and `part_number_rules` columns left empty)
+
+**DDB mode:** discontinued rows use `JIRA-DDB-<ticket>-<NN>[-<icons>]` instead; `<NN>` is shared with the normal rows' sequence (§16).
 
 ## 3a. Selectable vs. Derived Params (icons defined in `params` but not in the part number)
 
@@ -203,3 +207,63 @@ with open(output_path, 'w', newline='', encoding='utf-8-sig') as f:
     ...
 ```
 Verify the BOM is present by checking that the file's first 3 bytes are `EF BB BF` before finalizing.
+
+## 16. Discontinued DB (DDB) Mode — Discontinued Input File (on request only)
+
+**Trigger:** generate only when the user explicitly says the ticket is for the DDB (discontinued database) / asks for a Discontinued file. It is derived from the Input GDB CSV built in the same run — the GDB CSV must exist first.
+
+**File name:** `Discontinued_<category_name_common>_<subsidary_cd>_TestFile_<YYMMDD>_<scenario_tag>.csv`
+Example: `Discontinued_JIR_A2_285_MJP_TestFile_260930_replacement_chain.csv`
+- Category underscore-joined, 6-digit `YYMMDD`, same case rules as §6.
+- In DDB mode the scenario tag (§7) is **mandatory**: it is the 1–2 word test nature, and the same tag is appended to all other files in the run (Input, SpecGrouping, TypeGrouping, TestScenarios).
+
+**S3 upload destination:** not yet defined (TODO — confirm with the team). Tell the user this rather than guessing.
+
+### Step 1 — Input GDB CSV in DDB mode (10 rows by default)
+
+- **4 DDB rows + 6 normal rows**, numbered `NN = 01..10` in one sequence, with the DDB rows mixed in (not grouped at the end).
+- DDB row `part_number`: `JIRA-DDB-<ticket>-<NN>`, plus the icon suffix when it has params (e.g. `JIRA-DDB-2285-04-①-②`). Normal rows keep `JIRA-<ticket>-<NN>[-icons]` (§3).
+- `part_number_type` stays `JIRA-<NN>` for **every** row, DDB or not (§4). `TypeMatch` therefore lists all 10 types.
+- DDB rows are ordinary GDB rows — they must pass every existing GDB validator (icons, params, rules, spec types, etc.).
+- Minimums: among the DDB rows at least **1 plain** and **2 icon-bearing**; at least **3 normal rows** so every recommendation slot can be filled.
+
+### Step 2 — Discontinued file
+
+**Header:** the 10 fixed columns, then `recommend_part_number_n, recommend_part_number_type_n, recommend_params_n` for `n = 1..N`.
+
+Fixed columns (in order): `discontinued_part_number, discontinued_part_number_type, category_name_original_en, category_name_original, category_name_common, brand_name_original_en, brand_name_original, brand_name_common, subsidary_cd, discontinued_params`
+
+Default `N = 3` → 19 columns. If the user asks for more recommendations, N grows: column count = `10 + 3N`.
+
+**Rows:** exactly one per DDB part number; no rows for normal part numbers.
+
+**Values** — everything is read from the part number's GDB row:
+
+| Discontinued column | Source (GDB row of the discontinued pn) |
+|---|---|
+| `discontinued_part_number` | `part_number` |
+| `discontinued_part_number_type` | `part_number_type` |
+| `category_name_original_en` | `category_name_original` (GDB has no `_en` source) |
+| `category_name_original` / `category_name_common` | same-named GDB columns |
+| `brand_name_original_en` | `brand_name_original` (GDB has no `_en` source) |
+| `brand_name_original` / `brand_name_common` / `subsidary_cd` | same-named GDB columns |
+| `discontinued_params` | `params`, copied unchanged (ranges, key=value lists, plain lists like `①[10,20,30]` all allowed) |
+| `recommend_part_number_n` / `_type_n` / `recommend_params_n` | `part_number` / `part_number_type` / `params` of the recommended **normal** GDB row |
+
+- Icons keep the GDB format `-①-②` (not the `-①②` form seen in an older reference), because values are copied from the GDB.
+- Slots fill left to right. A slot is *filled* when its part number and type are set; `recommend_params_n` is then the GDB params as-is — it may be empty when the recommended row is plain. An empty slot has all 3 cells empty.
+- A recommendation always points at a normal (non-DDB) row; a DDB row is never recommended. No part number repeats within one row.
+- Encoding: UTF-8 with BOM (§15), standard CSV quoting.
+
+**Default shapes for the 4 DDB rows:**
+
+| DDB row | Recommendations |
+|---|---|
+| Plain | none (no alternative) |
+| Plain | 1 |
+| Icon | 2 |
+| Icon | 3 (this row sets N = 3) |
+
+Reuse at least one normal part number across two DDB rows (e.g. the same normal pn in the 2-rec and 3-rec rows).
+
+**Test Scenarios doc:** add a table mapping each DDB row → plain / icon-bearing → shape (0/1/2/3 recs) → recommended part numbers.

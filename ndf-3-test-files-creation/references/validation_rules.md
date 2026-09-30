@@ -144,3 +144,23 @@ When generating the 3 files as one linked set, they must agree on:
 - `brand_name_common` — values used in Spec_Grouping's `exception` sheet and Type_Grouping's `TypeMatch` sheet must exist in the InputSheet CSV.
 - `spec_name_common_*` (InputSheet) ↔ `spec_name_common` (Spec_Grouping's both sheets, Type_Grouping's `BasicSpecDefenition`) — every spec name referenced in the xlsx files must actually appear as a `spec_name_common_N` value in the CSV.
 - `part_number_type` (InputSheet) ↔ `part_number_type` (Type_Grouping `TypeMatch`) — every (part_number_type, brand_name_common) pair in TypeMatch must exist in the CSV.
+
+---
+
+## 4. Discontinued file (DDB mode only — test_run_conventions.md §16)
+
+**File name pattern:** `Discontinued_<category>_<subsidary_cd>_TestFile_<YYMMDD>_<scenario_tag>.csv`
+**Format:** UTF-8 CSV **with BOM**, standard CSV quoting.
+
+**Structure:**
+- Header is exactly the 10 fixed columns `discontinued_part_number, discontinued_part_number_type, category_name_original_en, category_name_original, category_name_common, brand_name_original_en, brand_name_original, brand_name_common, subsidary_cd, discontinued_params`, followed by complete, contiguous triples `recommend_part_number_n, recommend_part_number_type_n, recommend_params_n` for n = 1..N (N ≥ 1).
+
+**Row / data rules:**
+- One row per DDB (`JIRA-DDB-`) part number in the Input CSV — none missing, none duplicated.
+- Every discontinued and recommended part number exists in the Input CSV.
+- No normal row is listed as discontinued; no DDB row is recommended.
+- Slots fill left to right; each slot is fully filled (part number + type, params = GDB params, possibly empty) or fully empty.
+- No recommended part number repeats within a row.
+- Every copied field equals the GDB row's value, including params (`_en` columns equal their `*_original` GDB value).
+
+**Cross-file (extends the checklist above):** every discontinued/recommended part number exists in the Input CSV, and the recommended type/params match that row.
