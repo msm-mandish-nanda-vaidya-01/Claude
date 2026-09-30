@@ -47,6 +47,7 @@ spec_type_1, spec_name_original_1, spec_name_common_1, spec_value_1, spec_unit_1
 - Selectable vs. derived icon value restriction (test_run_conventions.md §3a):
   - A selectable icon's values must NOT contain `+` or `-`: neither side of a `key=value` pair in a value-list/irregular block, and a range block's `min` must be `>= 0`.
   - A derived icon's values MAY contain `+` or `-` freely (e.g. `+5%`, `-5%`, negative range bounds).
+  - `key=value` pairs (`H=hh`, `null=-`, any `a=b`) are allowed only for selectable icons (used in part number creation). A derived icon's value list must be a plain comma-separated list: `①[H=hh,G=gg]` if ① is in part_number, `①[hh,gg]` if it isn't.
 - Derived icon assignment / reachability (test_run_conventions.md §8):
   - Every derived icon must be assigned by at least one `part_number_rules` line (`Rule <icon>=<value>;`).
   - Every value defined for a derived icon in `params` must be produced by at least one rule branch — a defined value with no reachable rule branch is an error.

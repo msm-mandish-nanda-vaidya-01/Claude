@@ -170,15 +170,16 @@ def _block_tokens_both_sides(block):
 
 def _block_values_for_reachability(block):
     """Right-hand-side value tokens (the ones referenced in part_number_rules
-    comparisons/assignments) for a value-list/irregular block. Returns None
-    for a range block (continuous values, not enumerable) so callers can skip
-    the reachability check for that icon."""
+    comparisons/assignments) for a value-list/irregular block, or every item
+    of a plain comma-separated list. Returns None for a range block
+    (continuous values, not enumerable) so callers can skip the reachability
+    check for that icon."""
     pairs = re.findall(r"([^,\[\]=]+)=([^,\[\]=]+)", block)
     if pairs:
         return {v.strip() for k, v in pairs}
     if _RANGE_BLOCK_RE.fullmatch(block):
         return None
-    return set()
+    return {v.strip() for v in block.split(",") if v.strip()}
 
 
 def _derived_icon_assignments(rules_text):
@@ -313,8 +314,8 @@ def validate_input_csv(path, report: Report):
                     block = params_map.get(icon)
                     if block is None:
                         report.err(f"Row {i}: irregular icon {icon} not defined in params")
-                    elif "XYZ=XYZ" not in block:
-                        report.warn(f"Row {i}: irregular params for {icon} has no XYZ=XYZ catch-all (§10 convention)")
+                    elif "XYZ=XYZ" not in block and "XYZ" not in [v.strip() for v in block.split(",")]:
+                        report.warn(f"Row {i}: irregular params for {icon} has no XYZ=XYZ / XYZ catch-all (§10 convention)")
             n += 1
 
         # icon consistency: part_number icons ("selectable") must be consecutive from ①, no gaps
@@ -358,6 +359,15 @@ def validate_input_csv(path, report: Report):
                         f"Row {i}: selectable icon {icon} has a value containing '+'/'-' "
                         f"({tok!r}) — not allowed for selectable icons (§3a)"
                     )
+
+        # key=value pairs only for icons used in part number creation (selectable);
+        # derived icons must be a plain list (e.g. ④[hh,gg], never ④[H=hh] or ④[null=-]).
+        for icon, block in params_map.items():
+            if icon not in pn_icons and "=" in block:
+                report.err(
+                    f"Row {i}: derived icon {icon} uses key=value pairs ({block!r}) — only icons "
+                    f"used in part number creation may; use a plain list like {icon}[hh,gg] (§3a)"
+                )
 
         for icon in params_map:
             if icon in pn_icons:

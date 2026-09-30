@@ -63,7 +63,7 @@ Part numbers are tied to the Jira ticket number and the sequential row number. *
 
 ## 3a. Selectable vs. Derived Params (icons defined in `params` but not in the part number)
 
-When `params` defines an icon that does NOT appear in the `part_number` icon suffix, that icon is **derived**: the customer has no slot to pick it from in the printed part number, so the system must compute/assign its value automatically instead. This changes four things versus a row with only selectable icons:
+When `params` defines an icon that does NOT appear in the `part_number` icon suffix, that icon is **derived**: the customer has no slot to pick it from in the printed part number, so the system must compute/assign its value automatically instead. This changes five things versus a row with only selectable icons:
 
 1. **One consecutive icon sequence, no gaps, across selectable + derived combined.** E.g. a part number with 3 selectable icons (①②③) that also needs 2 derived icons uses ④ and ⑤ for those — never restart at ①, never skip a number.
 2. **Ordering inside the `params` cell: selectable icons must be defined first, in order, then derived icons after them.** Don't interleave. E.g. `①[...],②[...],③[...],④[...],⑤[...]` (①②③ selectable, ④⑤ derived) — never `①[...],④[...],②[...]`.
@@ -71,6 +71,9 @@ When `params` defines an icon that does NOT appear in the `part_number` icon suf
    - A **selectable** icon's defined values must NOT contain `+` or `-` — these values get substituted straight into the customer-facing part number, and a `+`/`-` there would be ambiguous or break parsing. For a value-list/irregular block this means neither side of any `key=value` pair may contain `+`/`-`. For a range block it means `min` must be `>= 0` (a negative min would let the customer land on a `-`-containing resolved value).
    - A **derived** icon's defined values MAY contain `+`/`-` freely (e.g. `+5%`, `-5%`, negative range bounds) — they're never substituted into a printed slot the same way, so there's no parsing conflict.
 4. **Every derived icon must be assigned by `part_number_rules`, and every value it defines must be reachable.** `part_number_rules` needs enough `IF [...] Rule <derived_icon>=<value>;` branches (conditioned on the selectable icons) that each value listed for that derived icon actually gets produced by at least one branch. A value sitting in a derived icon's `params` list that no rule branch ever assigns is a dead value — the pipeline can define it but the customer can never actually reach it.
+5. **`key=value` pairs only for icons used in part number creation.** A `key=value` pair (`H=hh`, `null=-`, any `a=b`) maps a part-number code to its value, so it can only appear in a **selectable** icon's block. A **derived** icon's value list must be a plain comma-separated list of values.
+   - ① used in part number creation: `①[H=hh,G=gg]`
+   - ① not used in part number creation: `①[hh,gg]` — never `①[H=hh,G=gg]` or `①[null=-]` (write `①[-]`)
 
 See §8 for the exact `part_number_rules` syntax used to express derived-icon assignment, including a worked example.
 
@@ -168,7 +171,7 @@ These columns are in addition to (not a replacement for) the full required-colum
 
 ## 10. Params Value-List Convention (test-data pattern)
 
-For `irregular`/formula-style params with an explicit value list (e.g. `③[h=high grade,p=precision grade,XYZ=XYZ]`), it's standard practice in these test files to include a trailing catch-all pair `XYZ=XYZ` in each icon's value list. This represents a deliberate "non-matching / unmapped" value for negative-path testing (a value that doesn't satisfy any of the named rule conditions). Include this catch-all by default when generating irregular-type params with explicit value lists, unless the user says otherwise.
+For `irregular`/formula-style params with an explicit value list (e.g. `③[h=high grade,p=precision grade,XYZ=XYZ]`), it's standard practice in these test files to include a trailing catch-all pair `XYZ=XYZ` in each icon's value list. This represents a deliberate "non-matching / unmapped" value for negative-path testing (a value that doesn't satisfy any of the named rule conditions). Include this catch-all by default when generating irregular-type params with explicit value lists, unless the user says otherwise. For a derived icon (no `key=value` pairs allowed, §3a), the catch-all is the plain item `XYZ` instead (e.g. `④[positive,negative,XYZ]`).
 
 ## 11. Spec Grouping File — `exception` Sheet
 
