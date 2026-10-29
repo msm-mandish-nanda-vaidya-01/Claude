@@ -1,0 +1,34 @@
+1. Token optimization: Convert the data creation in TOONS/CSV format and then use custom python code to convert it into csv/xlsx
+2. Fixed structure for documentation file (include while searching a part number what will be the possible replacements)
+3. different versions of a ticket should be 0A, 0B respectively
+- Attempt to reduce context of this skill. Prompt me before modifying or removing any information or if something requires my clarification. 
+
+FILE CREATION:
+13. params ma English(only for irregular), number(formula, irregular, range), Japanese (only for irregular) character sabb ko hala
+14. Type Grouping (Type Match) should have the same brand name part number type combination as in the input sheet
+
+
+TEST CASE CREATION:
+
+
+
+** COMPLETED: 
+1. provide reference examples for /ndf-3-test-files-creation
+2. create skills for test cases
+3. claude description by default -> If you have confusion with any of the rules or reference in this file for updating the skill then ask me.
+4. data pugena
+6. add test case
+
+(NO) 5. create "purpose of each data" documentation file (also who it is related to) no text jargon, minimal explanation
+9. Generate the test data of these types:
+- Happy path data
+- Boundary values
+- Invalid data (only if needed for testing but should be schema and rules compliant)
+- Edge cases
+10. create test scenarios file for referencing based on the user story
+
+7. test case ma add code 
+8. test case should cover all possible scenarios mentioned in the ticket and also should be based on the data 
+11. test case creation required files (input sheet, test scenarios documentation, ticket description)
+
+

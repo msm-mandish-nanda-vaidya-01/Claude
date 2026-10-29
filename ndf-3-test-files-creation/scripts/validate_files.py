@@ -182,6 +182,58 @@ def _block_values_for_reachability(block):
     return {v.strip() for v in block.split(",") if v.strip()}
 
 
+def _resolved_spec_values(spec_type, spec_value, params_map):
+    """Values a spec can resolve to, for stringReplacement existence checks:
+    the literal value for fixed, the right side of code=value pairs / plain list
+    items / enumerated start-end/step values for irregular and range. Returns
+    None when not enumerable (formula, or a very large range)."""
+    if spec_type == "fixed":
+        return {spec_value}
+    if spec_type not in ("irregular", "range"):
+        return None
+    icons = _icons_in(spec_value)
+    block = params_map.get(icons[0]) if len(icons) == 1 else None
+    if block is None:
+        return set()
+    m = _RANGE_BLOCK_RE.fullmatch(block)
+    if m:
+        lo, hi, step = float(m.group(1)), float(m.group(2)), float(m.group(3))
+        if step <= 0 or (hi - lo) / step > 1000:
+            return None
+        out, k = set(), 0
+        while lo + k * step <= hi + 1e-9:
+            out.add(f"{round(lo + k * step, 6):g}")
+            k += 1
+        return out
+    return _block_values_for_reachability(block) or set()
+
+
+def validate_string_replacement(value, spec, resolved, report: Report):
+    """stringReplacement checks (validation_rules.md §2), only when non-empty."""
+    import json
+
+    try:
+        groups = json.loads(value)
+    except ValueError:
+        report.err(f"specNameCommon stringReplacement for {spec!r} is not valid [[\"a\",\"b\"],...]: {value!r}")
+        return
+    if not (isinstance(groups, list) and groups
+            and all(isinstance(g, list) and g and all(isinstance(v, str) for v in g) for g in groups)):
+        report.err(f"specNameCommon stringReplacement for {spec!r} must be a list of non-empty string lists: {value!r}")
+        return
+    seen = Counter(v for g in groups for v in set(g))
+    for v, c in seen.items():
+        if c > 1:
+            report.err(f"specNameCommon stringReplacement for {spec!r}: value {v!r} appears in more than one group")
+    if resolved is not None:
+        missing = sorted(v for v in seen if v not in resolved)
+        if missing:
+            report.warn(
+                f"specNameCommon stringReplacement for {spec!r}: value(s) {missing} not produced by any "
+                f"Input CSV row (fine if deliberate for testing)"
+            )
+
+
 def _derived_icon_assignments(rules_text):
     """Best-effort parse of 'Rule <icon>=<value>' assignments (optionally
     chained with AND) out of part_number_rules text. Returns {icon: {values}}."""
@@ -229,14 +281,17 @@ def validate_input_csv(path, report: Report):
     non_null_cols = [
         "part_number", "part_number_type", "category_name_original", "category_name_common",
         "brand_name_original", "brand_name_common", "subsidary_cd", "economy_flag",
-        "spec_type_1", "spec_name_original_1", "spec_name_common_1", "spec_value_1", "spec_unit_1",
-    ]
+        "spec_type_1", "spec_name_original_1", "spec_name_common_1", "spec_value_1",
+    ]  # spec_unit_N is a required column but may be empty (no '-' placeholder needed)
 
     seen_rows = Counter()
     categories = set()
     subsidiaries = set()
     spec_names_all = set()
     part_number_types = set()
+    spec_units = {}  # spec_name_common -> {spec_unit values seen} (empty counts as a value)
+    # spec_name_common -> set of resolved values, or None if not enumerable (formula)
+    resolved_values = {}
 
     for i, row in enumerate(rows, start=2):  # +2: header is row1
         row_key = tuple(row.get(c, "") for c in header)
@@ -272,6 +327,12 @@ def validate_input_csv(path, report: Report):
             spec_name_common = row.get(f"spec_name_common_{n}", "")
             if spec_name_common:
                 spec_names_all.add(spec_name_common)
+                spec_units.setdefault(spec_name_common, set()).add(row.get(f"spec_unit_{n}", "") or "")
+                vals = _resolved_spec_values(spec_type, spec_value, params_map)
+                if vals is None or resolved_values.get(spec_name_common, set()) is None:
+                    resolved_values[spec_name_common] = None
+                else:
+                    resolved_values.setdefault(spec_name_common, set()).update(vals)
             if spec_type not in VALID_SPEC_TYPE:
                 report.err(f"Row {i}: spec_type_{n} {spec_type!r} not in {VALID_SPEC_TYPE} (note: 'choice' is never valid)")
             if spec_name_common and "/" in spec_name_common:
@@ -314,6 +375,8 @@ def validate_input_csv(path, report: Report):
                     block = params_map.get(icon)
                     if block is None:
                         report.err(f"Row {i}: irregular icon {icon} not defined in params")
+                    elif _RANGE_BLOCK_RE.fullmatch(block):
+                        pass  # irregular [start-end/step]: no XYZ catch-all needed (§10)
                     elif "XYZ=XYZ" not in block and "XYZ" not in [v.strip() for v in block.split(",")]:
                         report.warn(f"Row {i}: irregular params for {icon} has no XYZ=XYZ / XYZ catch-all (§10 convention)")
             n += 1
@@ -431,10 +494,18 @@ def validate_input_csv(path, report: Report):
     if len(subsidiaries - {None}) > 1:
         report.err(f"subsidary_cd not consistent across rows: {subsidiaries}")
 
+    for spec, units in spec_units.items():
+        if len(units) > 1:
+            report.err(
+                f"spec_unit not consistent for spec_name_common {spec!r}: "
+                f"{sorted(repr(u) for u in units)} (empty counts as a value)"
+            )
+
     return {
         "category_name_common": next(iter(categories), None),
         "subsidary_cd": next(iter(subsidiaries), None),
         "spec_names": spec_names_all,
+        "resolved_values": resolved_values,
         "part_number_types": part_number_types,
         "brands": {row.get("brand_name_common") for row in rows},
         "rows": rows,
@@ -482,6 +553,10 @@ def validate_xlsx_pair(spec_path, type_path, input_ctx, report: Report):
             if cf:
                 for msg in validate_calculation_formula(cf):
                     report.err(f"specNameCommon calculationFormula error: {msg}")
+            sr = r.get("stringReplacement")
+            if sr:
+                spec = r.get("spec_name_common")
+                validate_string_replacement(str(sr), spec, input_ctx["resolved_values"].get(spec), report)
 
     if "TypeMatch" in type_wb.sheetnames:
         ws = type_wb["TypeMatch"]

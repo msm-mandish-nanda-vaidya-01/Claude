@@ -18,7 +18,9 @@ spec_type_1, spec_name_original_1, spec_name_common_1, spec_value_1, spec_unit_1
 ```
 - At least one complete spec column set (`spec_type_N ... spec_unit_N`) is required; additional sets (N=2, N=3, ...) must each be complete if present.
 
-**Non-null columns:** part_number, part_number_type, category_name_original, category_name_common, brand_name_original, brand_name_common, subsidary_cd, economy_flag, spec_type_1, spec_name_original_1, spec_name_common_1, spec_value_1, spec_unit_1
+**Non-null columns:** part_number, part_number_type, category_name_original, category_name_common, brand_name_original, brand_name_common, subsidary_cd, economy_flag, spec_type_1, spec_name_original_1, spec_name_common_1, spec_value_1
+
+- `spec_unit_N` columns must be present, but values may be empty. Leave them empty when there is no unit — no `-` placeholder is needed.
 
 **Row rules:**
 - No leading/trailing/consecutive spaces in any cell.
@@ -31,13 +33,14 @@ spec_type_1, spec_name_original_1, spec_name_common_1, spec_value_1, spec_unit_1
 - `spec_name_common_*` must not contain "/".
 - `spec_value_*` must not contain "," or lowercase "φ".
 - `economy_flag` ∈ {0, 1}.
+- `spec_unit_*` must be identical for the same `spec_name_common` across all rows and spec sets (empty counts as a value, so empty on one row and `mm` on another is an error).
 - `params` pattern: `①[value list], ②[range]` etc. Value list = `[value1=value1, value2=value2]` or `[start-end/step]`. Range = `[min-max/step]`. Numeric validity: min < max, step > 0.
 - `part_number_rules`: every line starts with "If" (optional) or "Rule" (mandatory) and ends with ";".
 - `spec_type` / `spec_value` / `params` cross-check:
   - fixed → spec_value must NOT be a parameter icon (①②③...).
   - formula → spec_value must contain ≥1 parameter icon, every icon used must be defined in params.
   - range → spec_value must be exactly one parameter icon, defined in params, whose block matches `min-max/step` (non-zero step).
-  - irregular → spec_value must be exactly one parameter icon, defined in params, whose block matches key=value pairs or a comma-separated list.
+  - irregular → spec_value must be exactly one parameter icon, defined in params, whose block matches key=value pairs, a comma-separated list ("irregular option"), or `start-end/step` ("irregular range"). An irregular range block needs no `XYZ` catch-all (test_run_conventions.md §10).
 - Parameter icon consistency across part_number, part_number_rules, params, spec_value_1..N:
   - Icons defined in params must appear in some spec_value.
   - Icons used in part_number/part_number_rules must be defined in params.
@@ -80,13 +83,26 @@ stringReplacement, calculationFormula, unitConversionFormula
 - `subsidary_cd` ∈ {KOR, MJP, USA}.
 - `category_name_common` single consistent value across all rows.
 - `spec_name_common` unique within each sheet.
-- `stringReplacement` format: `[["value_1","value_2"],["value_3","value_4"]]`. A value must not appear in more than one replacement group for the same `spec_name_common`.
+- `stringReplacement` format: `[["value_1","value_2"],["value_3","value_4"]]`. A value must not appear in more than one replacement group for the same `spec_name_common`. Default **empty** — populate only when the user explicitly asks (see "stringReplacement matching rules" below).
 - Required columns (#, subsidary_cd, category_name_common, spec_name_common, priority_order) cannot be null.
 - `category_name_common` must match the InputSheet CSV(s).
 - `spec_name_common` values must exist in the reference InputSheet CSV(s) (i.e. must match a `spec_name_common_*` value there).
 - `subsidary_cd` must be consistent across all files (InputSheet, Spec_Grouping, Type_Grouping).
 - `priority_order` unique within the `specNameCommon` sheet.
 - `calculationFormula` in `specNameCommon`: default empty. If populated, it must comply with the syntax rules in "calculationFormula syntax rules" below — anything that doesn't match is a validator error, not a warning.
+
+### stringReplacement matching rules
+
+These apply only when `stringReplacement` is non-empty for a row (on explicit request only).
+
+- Each inner array is a group of values that match each other. Separate inner arrays are **not** related to each other.
+- Values match **without replacing the actual values**, e.g. `horizontal` ↔ `horizontal spindle` — both stay as written in the data.
+- Matching is **case-sensitive**, but members of the same inner array match each other, e.g. `["Ø6","ø6"]`.
+- Grouping non-equal values in one array (e.g. `["1","1.0","1.5"]`) is **deliberate for testing** — not an error.
+- Values not listed in any group behave normally (plain matching).
+- Values are compared against the resolved spec value (the right side of `code=value` in params, test_run_conventions.md §3b), not the icon or the part-number code.
+- `spec_unit` is part of matching; it is assumed consistent for the same `spec_name_common` (enforced in §1).
+- Validator: malformed JSON / non-string entries or a value in more than one group → ERROR; a value not produced by any Input CSV row for that spec → WARN (may be deliberate).
 
 ### calculationFormula syntax rules
 

@@ -77,6 +77,16 @@ When `params` defines an icon that does NOT appear in the `part_number` icon suf
 
 See §8 for the exact `part_number_rules` syntax used to express derived-icon assignment, including a worked example.
 
+## 3b. Code vs. Value in params (`code=value`)
+
+In a selectable icon's `code=value` pair:
+
+- The **left** side (code) is used for part number creation — it replaces the icon in the expanded part number.
+- The **right** side (value) is the resolved spec value. It is the value checked against **stringReplacement** (`validation_rules.md` §2) and **`part_number_rules`** conditions (§8).
+- The CSV `spec_value_N` cell still holds the icon itself (`①`), and `part_number` keeps the icon form (`JIRA-<ticket>-NN-①`). Expanded part numbers only appear in search results and in the Test Scenarios doc, never in the CSV.
+
+**Example:** `①[10=1.5,1=10.5,5=5,XYZ=XYZ]` → expanded part number `JIRA-<ticket>-08-10` has the resolved value `1.5` (seen in NDFDPAPJ-2385).
+
 ## 4. Part Number Type Convention
 
 The part number type is just the ticket-independent, icon-independent sequence suffix — it does NOT include the ticket segment or the parameter icons.
@@ -136,6 +146,7 @@ When a test run is built around a specific testing scenario (e.g. exercising AND
 - **In the IF-condition:** `IF [③=high grade OR ③=precision grade] Rule 110<=②<=2000;` or `IF [④=ABC AND ⑤!=-] Rule ⑦=- AND ⑧=-;`
 - **In the Rule-consequent:** `Rule ②!=長16m AND ②!=長17m AND ②!=長18m AND ②!=ロ16m AND ②!=ロ17m AND ②!=ロ18m;`
 - Every line must still start with `IF` (optional) or `Rule` (mandatory) and end with `;`, per `validation_rules.md`. The `IF [...]` block, when present, comes before `Rule`, and both the condition inside `[...]` and the consequent after `Rule` may chain multiple `AND`/`OR` comparisons.
+- Comparisons such as `③=high grade` use the **right-side value** of the icon's `code=value` pair, not the code (§3b).
 - **When a line has an `IF [...]` condition, the first parameter icon referenced must exist in the `part_number` column** — i.e. conditions branch on selectable icons (per `validation_rules.md`'s `PartNumberRulesParamSequenceCheck`). The `Rule` consequent is where a derived icon (§3a) gets targeted instead — e.g. in `IF [④=ABC AND ⑤!=-] Rule ⑦=- AND ⑧=-;`, ④ is the selectable icon driving the condition, while ⑦/⑧ are derived icons being assigned the value `-` (only legal for derived icons, since selectable icons can't carry `-` in their values, per §3a).
 - **Derived-icon assignment:** a derived icon gets its value exclusively through `Rule <derived_icon>=<value>;` lines, almost always behind an `IF [...]` branch on one or more selectable icons. A row with a single-valued derived icon can use one unconditional `Rule <derived_icon>=<value>;` line instead (no `IF` needed) — in that case the derived icon itself is the line's first (and only) icon, which is fine precisely because there's no condition to branch on.
 - **Reachability:** every value listed in a derived icon's `params` block must be produced by at least one `part_number_rules` branch. For a derived icon with N possible values, that typically means N separate `IF [...] Rule <derived_icon>=<value_n>;` lines (one per value), each keyed off a different selectable-icon condition — not just one branch that only ever reaches one of the values.
@@ -171,7 +182,9 @@ These columns are in addition to (not a replacement for) the full required-colum
 
 ## 10. Params Value-List Convention (test-data pattern)
 
-For `irregular`/formula-style params with an explicit value list (e.g. `③[h=high grade,p=precision grade,XYZ=XYZ]`), it's standard practice in these test files to include a trailing catch-all pair `XYZ=XYZ` in each icon's value list. This represents a deliberate "non-matching / unmapped" value for negative-path testing (a value that doesn't satisfy any of the named rule conditions). Include this catch-all by default when generating irregular-type params with explicit value lists, unless the user says otherwise. For a derived icon (no `key=value` pairs allowed, §3a), the catch-all is the plain item `XYZ` instead (e.g. `④[positive,negative,XYZ]`).
+For `irregular`/formula-style params with an explicit value list (e.g. `③[h=high grade,p=precision grade,XYZ=XYZ]`), it's standard practice in these test files to include a trailing catch-all pair `XYZ=XYZ` in each icon's value list. This represents a deliberate "non-matching / unmapped" value for negative-path testing (a value that doesn't satisfy any of the named rule conditions). Include this catch-all by default when generating irregular-type params with explicit value lists, unless the user says otherwise. For a derived icon (no `key=value` pairs allowed, §3a), the catch-all is the plain item `XYZ` instead (e.g. `④[positive,negative,XYZ]`). An irregular **range** block (`spec_type=irregular` with `[start-end/step]`, e.g. `①[1-10/1]`) is a numeric run, not a value list — no `XYZ` catch-all is added to it.
+
+The left side of each pair is the part-number code and the right side is the resolved value used for matching (§3b).
 
 ## 11. Spec Grouping File — `exception` Sheet
 
@@ -270,3 +283,22 @@ Default `N = 3` → 19 columns. If the user asks for more recommendations, N gro
 Reuse at least one normal part number across two DDB rows (e.g. the same normal pn in the 2-rec and 3-rec rows).
 
 **Test Scenarios doc:** add a table mapping each DDB row → plain / icon-bearing → shape (0/1/2/3 recs) → recommended part numbers.
+
+## 17. Search / Expansion Behaviour (expected results)
+
+These describe how the pipeline search behaves, so the Test Scenarios doc can state the expected result for each candidate. They don't change how the files are built.
+
+- Params can be expanded, but **only one version of a part number** is returned at a time.
+- The chosen version is the expansion whose resolved value (§3b) matches the searched part number's value.
+- A match through stringReplacement **counts as a direct match** — expected `match` = 1 (e.g. `1.5` vs source `1` when `["1","1.5"]` are grouped).
+- If no value matches, fall back to the default (NDFDPAPJ-2464):
+  - irregular option params (`code=value` / list) → the **first** value in the list
+  - irregular range params (`[start-end/step]`) → the **start (minimum)** value
+- A candidate's part number and spec value are only ever built from a code / value its params actually define. A part number or spec value the params cannot produce is never returned (NDFDPAPJ-2464).
+
+## 18. Default vs. Custom Replacement and Reverse Search
+
+- **Default replacement:** candidates match on the `BasicSpecDefenition` spec(s), e.g. `shaft direction`.
+- **Custom replacement:** after the default replacement, another spec is added to the basic spec **at runtime** (it is not written into `BasicSpecDefenition`, so the 1–2 spec rule in §13 is unchanged). Candidates must then also match on the added spec.
+- **Reverse search:** searching a replacement part number as the source must return the original part number in its replacement list. Design the data so every expected replacement pair is symmetric.
+- **Example** (seen in NDFDPAPJ-2385): source `JIRA-<ticket>-01`, default replacement on `shaft direction` → candidates `JIRA-<ticket>-08-10`, `JIRA-<ticket>-03-A`, `JIRA-<ticket>-05-1`, `JIRA-<ticket>-07-H`. `JIRA-<ticket>-07-H` must be returned; by the reverse rule, searching `JIRA-<ticket>-07-H` as the source must in turn return `JIRA-<ticket>-01`.
